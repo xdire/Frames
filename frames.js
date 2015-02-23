@@ -51,6 +51,7 @@
         this.connNotify = null;
         this.connRepeatError = null;
         this.connOnError=null;
+        this.connEarlyTermination=true;
 
         this.userId = null;
         this.userKey = null;
@@ -486,7 +487,14 @@
                 xhr.setRequestHeader("X-Requested-With","XMLHttpRequest");
 
                 // Timeout counter
-                timeout=setTimeout( function(){console.log(' + --- XHR REQUEST TIMED OUT '); xhr.abort(); clearInterval(ival);}.bind(xhr),3000);
+                // NEED TO SET FOR NON EARLY TERMINATION
+                if(XWF.connEarlyTermination) {
+                    timeout = setTimeout(function () {
+                        FBNotify({message:"Connection timed out"});
+                        xhr.abort();
+                        clearInterval(ival);
+                    }.bind(xhr), 3000);
+                }
 
                 xhr.onreadystatechange = function()
                 {
@@ -540,6 +548,7 @@
                     data = FBObjectToPost(data);
                 xhr.send(data);
 
+                XWF.connEarlyTermination=true;
             }
 
         }
