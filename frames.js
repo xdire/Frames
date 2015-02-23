@@ -43,6 +43,9 @@
         this.defaultHeaderHeight=76;
         this.defaultNavBarHeight=40;
 
+        this.windowHeight=0;
+        this.windowWidth=0;
+
         this.connServer = null;
         this.connServerMethod = null;
         this.connQueryObject = null;
@@ -68,6 +71,11 @@
         this.privateViewCurrentIndex=null;
 
         this.privateNotifications=null;
+
+        if(this.windowHeight==0 || this.windowWidth==0){
+            this.windowHeight=window.innerHeight;
+            this.windowWidth=window.innerWidth;
+        }
 
         this.connection = function(val){
 
@@ -99,6 +107,7 @@
             var reqEventWindowID=(val.hasOwnProperty('raiseWindowID'))?val['raiseWindowID']:false;
             var reqEventWaitCB=(val.hasOwnProperty('waitCallback'))?val['waitCallback']:false;
             var reqEventComplete=(val.hasOwnProperty('onComplete'))?val['onComplete']:null;
+            var reqEventReturnObj=(val.hasOwnProperty('returnObject'))?val['returnObject']:null;
             var reqCancelWindow=(val.hasOwnProperty('onCancelWindow'))?val['onCancelWindow']:null;
             var reqRepeatOnError=(val.hasOwnProperty('repeatFunction'))?val['repeatFunction']:false;
             var reqDisableInit=(val.hasOwnProperty('disableInitiator'))?val['disableInitiator']:false;
@@ -132,6 +141,12 @@
                 {
                     var window=null;
                     var result={window:null,content:null,title:null,data:null};
+                    // -------------------------------------------------------------------
+                    // If event need to return some data object which not belong to callback
+                    if(reqEventReturnObj!=null){
+                        result['object'] = reqEventReturnObj;
+                    }
+
                     // -------------------------------------------------------------------
                     // Define is event need to return data to next functions
                     if(reqEventReturn){
@@ -178,8 +193,8 @@
                                     windowClass:reqAddClass,navigationBar:reqBackBar,changeTitle:reqChangeTitle,
                                     windowSubTitle:reqWindowSubTitle,returnData:reqEventReturn,raiseWindow:reqEventWindow,
                                     raiseWindowID:reqEventWindowID,waitCallback:reqEventWaitCB,onComplete:reqEventComplete,
-                                    onCancelWindow:reqCancelWindow,disableInitiator:reqDisableInit,server:currentServer,
-                                    query:currentObject,data:currentData
+                                    onCancelWindow:reqCancelWindow,disableInitiator:reqDisableInit,returnObject:reqEventReturnObj,
+                                    server:currentServer,query:currentObject,data:currentData
                                 });
                             };
 
@@ -214,7 +229,7 @@
 
                     }
 
-                },false);
+                },false,XWF.connEarlyTermination);
             }
         };
 
@@ -296,7 +311,7 @@
     function FBOpenWindowView(values)
     {
 
-        var win,id,header,headerTitle,content,title;
+        var win,id,header,headerTitle,content,title,backBarEx=false,headerEx=false;
 
         win = document.createElement('div');
         win.className = 'xwf_view xwf_view_background xwf_window xwf_visible xwf_slideInLeft';
@@ -327,6 +342,7 @@
             headerTitle.innerHTML = values.reqTitle;
         }
         header.appendChild(headerTitle);
+        headerEx=true;
 
         currentHeight-=XWF.defaultHeaderHeight;
 
@@ -345,13 +361,14 @@
             currentHeight-=XWF.defaultNavBarHeight;
 
             win.appendChild(backBar);
+            backBarEx=true;
 
         }
 
         content = document.createElement('div');
         content.className = 'xwf_window_content';
         content.style.height = currentHeight+'px';
-        content.style.width = currentWidth+'px';
+        //content.style.width = currentWidth+'px';
         content.addEventListener('touchstart',function(e){});
 
         var append =function(node){
@@ -364,7 +381,7 @@
 
         win.appendChild(content);
 
-        XWF.privateViewQueue.push({id:id,event:null,xhr:null});
+        XWF.privateViewQueue.push({id:id,window:win,event:null,xhr:null,content:content,withHeader:headerEx,withBackBar:backBarEx});
         XWF.privateViewCurrent=win;
         XWF.privateViewCurrentIndex=XWF.privateViewQueue.length-1;
 
@@ -472,7 +489,7 @@
 
     }
 
-    function FBXHRPostData(xhr,url,data,callback,ival){
+    function FBXHRPostData(xhr,url,data,callback,iterateValue,earlyTerminate){
 
         var timeout=null;
 
@@ -488,11 +505,11 @@
 
                 // Timeout counter
                 // NEED TO SET FOR NON EARLY TERMINATION
-                if(XWF.connEarlyTermination) {
+                if(earlyTerminate) {
                     timeout = setTimeout(function () {
                         FBNotify({message:"Connection timed out"});
                         xhr.abort();
-                        clearInterval(ival);
+                        clearInterval(iterateValue);
                     }.bind(xhr), 3000);
                 }
 
@@ -503,7 +520,7 @@
                         if(xhr.status == 200)
                         {
                             // Clear timers
-                            clearInterval(ival);
+                            clearInterval(iterateValue);
                             clearTimeout(timeout);
                             XWF.privateConnIterator=null;
                             callback(xhr.responseText);
@@ -521,7 +538,7 @@
                     }
                 };
 
-                if(ival==false)
+                if(iterateValue==false)
                 {
                     xhr.onerror = function () {
                         if (XWF.privateConnIterator == null)
@@ -535,12 +552,11 @@
                         if(!arrayIndex(XWF.privateConnPendingRequests,url))
                         {
                             inval = setInterval(function(){
-                                FBXHRPostData(nxhr,url,data,callback,inval);
+                                FBXHRPostData(nxhr,url,data,callback,inval,earlyTerminate);
                             },5000);
                             XWF.privateConnPendingRequests.push(url);
                             XWF.privateConnIterator=1;
                         }
-
                     };
                 }
 
@@ -635,6 +651,44 @@
         array.length = index < 0 ? array.length + index : index;
         return array.push.apply(array,n);
     }
+
+    window.addEventListener("resize", function () {
+
+        var w=window.innerWidth;
+        var h=window.innerHeight;
+        XWF.windowHeight=h;
+        XWF.windowWidth=w;
+
+        var winHeader=XWF.defaultHeaderHeight;
+        var winBack=XWF.defaultNavBarHeight;
+
+        var windows=XWF.privateViewQueue;
+        var wlen=windows.length;
+        var i=0;
+
+        for(i;i<wlen;i++)
+        {
+            newh=h;
+            cur=windows[i];
+            cur.window.style.width=w+'px';
+            cur.window.style.height=h+'px';
+            if(cur.withHeader){
+                newh-=winHeader;
+            }
+            if(cur.withBackBar){
+                newh-=winBack;
+            }
+            cur.content.style.height=newh+'px';
+        }
+
+        //var o=document.getElementsByClassName('xwf_view');
+        //var l=o.length;
+
+        //for(i=0;i<l;i++){
+
+        //}
+
+    });
 
     if(!window.XWF){window.XWF = $cine();}
 })();
