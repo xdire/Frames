@@ -38,6 +38,11 @@
 
     var FB = function()
     {
+
+        this.defaultView = null;
+        this.defaultHeaderHeight=76;
+        this.defaultNavBarHeight=40;
+
         this.connServer = null;
         this.connServerMethod = null;
         this.connQueryObject = null;
@@ -45,6 +50,7 @@
         this.connQueryMethod = null;
         this.connNotify = null;
         this.connRepeatError = null;
+        this.connOnError=null;
 
         this.userId = null;
         this.userKey = null;
@@ -57,6 +63,10 @@
 
         this.privateViewLoadingOverlay=null;
         this.privateViewQueue=[];
+        this.privateViewCurrent=null;
+        this.privateViewCurrentIndex=null;
+
+        this.privateNotifications=null;
 
         this.connection = function(val){
 
@@ -66,6 +76,7 @@
             XWF.connQueryData = (val.hasOwnProperty('queryData'))?val['queryData']:XWF.connQueryData;
             XWF.connQueryMethod = (val.hasOwnProperty('queryMethod'))?val['queryMethod']:XWF.connQueryMethod;
             XWF.connNotify = (val.hasOwnProperty('notify'))?val['notify']:XWF.connNotify;
+            XWF.connOnError = (val.hasOwnProperty('eventOnError'))?val['eventOnError']:XWF.connOnError;
             XWF.connRepeatError = (val.hasOwnProperty('repeatOnError'))?val['repeatOnError']:XWF.connRepeatError;
 
             XWF.userId = (val.hasOwnProperty('userId'))?val['userId']:XWF.userId;
@@ -77,55 +88,129 @@
 
         this.send = function(val){
 
+            var reqAddClass=(val.hasOwnProperty('windowClass'))?val['windowClass']:true;
             var reqBackBar=(val.hasOwnProperty('navigationBar'))?val['navigationBar']:true;
             var reqUserKey=(val.hasOwnProperty('sendUserKey'))?val['sendUserKey']:false;
             var reqChangeTitle=(val.hasOwnProperty('changeTitle'))?val['changeTitle']:false;
+            var reqWindowSubTitle=(val.hasOwnProperty('windowSubTitle'))?val['windowSubTitle']:false;
             var reqEventReturn=(val.hasOwnProperty('returnData'))?val['returnData']:true;
             var reqEventWindow=(val.hasOwnProperty('raiseWindow'))?val['raiseWindow']:false;
             var reqEventWindowID=(val.hasOwnProperty('raiseWindowID'))?val['raiseWindowID']:false;
             var reqEventWaitCB=(val.hasOwnProperty('waitCallback'))?val['waitCallback']:false;
             var reqEventComplete=(val.hasOwnProperty('onComplete'))?val['onComplete']:null;
-            var reqRepeatOnError=(val.hasOwnProperty('repeatOnError'))?val['repeatOnError']:false;
+            var reqCancelWindow=(val.hasOwnProperty('onCancelWindow'))?val['onCancelWindow']:null;
+            var reqRepeatOnError=(val.hasOwnProperty('repeatFunction'))?val['repeatFunction']:false;
             var reqDisableInit=(val.hasOwnProperty('disableInitiator'))?val['disableInitiator']:false;
 
+            var currentServer=(val.hasOwnProperty('server'))?val['server']:XWF.connServer;
+            var currentObject=(val.hasOwnProperty('query'))?val['query']:XWF.connQueryObject;
+            var currentData=(val.hasOwnProperty('data'))?val['data']:XWF.connQueryData;
+
             if(XWF.connServerMethod=='url')
-                XWF.privateConnResultUrl=XWF.connServer+'?'+FBObjectToPost(XWF.connQueryObject);
+                XWF.privateConnResultUrl=currentServer+'?'+FBObjectToPost(currentObject);
 
             if(reqEventWaitCB){
                 FBAppendLoadingOverlay();
             }
 
+            // -------------------------------------------------------------------
+            // If data object is some function then we try to return value from it
+            var sendingData={};
+            if(typeof currentData==='function'){
+                sendingData=currentData();
+            }
+            // If data object is just an object we send it as is
+            else {
+                sendingData=currentData;
+            }
+            // -------------------------------------------------------------------
+
             if (window.XMLHttpRequest) {
                 var xhr = new XMLHttpRequest();
-                FBXHRPostData( xhr, XWF.privateConnResultUrl, XWF.connQueryData, function(response)
+                FBXHRPostData( xhr, XWF.privateConnResultUrl, sendingData, function(response)
                 {
-
                     var window=null;
                     var result={window:null,content:null,title:null,data:null};
-
+                    // -------------------------------------------------------------------
                     // Define is event need to return data to next functions
                     if(reqEventReturn){
-                        result['data']=FBXHRCallbackResponse(response);
+                        var ret=FBXHRCallbackResponse(response);
+                        if(ret!=null)
+                            result['data']=ret;
+                        else
+                            result['data']={};
                     }
+                    // -------------------------------------------------------------------
 
                     // Raise Window Procedure Requested
                     if(reqEventWindow){
 
-                        window=FBOpenWindowView({raiseWindowID:reqEventWindowID});
+                        window=FBOpenWindowView({raiseWindowID:reqEventWindowID,cancelWindowEv:reqCancelWindow,raiseWindowClass:reqAddClass,reqBackBar:reqBackBar,reqTitle:reqChangeTitle,reqSubTitle:reqWindowSubTitle});
                         result['window']=window['frame'];
                         result['content']=window['content'];
                         result['title']=window['title'];
 
-                        if(XWF.privateViewLoadingOverlay!=null){
-                            XWF.privateViewLoadingOverlay.parentNode.removeChild(XWF.privateViewLoadingOverlay);
-                            XWF.privateViewLoadingOverlay=null;
+                        document.body.appendChild(window['frame']);
+                        setTimeout(function(){
+                            csstext=result.content.style.cssText;
+                            result.content.setAttribute('style',csstext+' -webkit-overflow-scrolling:touch;');
+                        },500);
+                    }
+
+                    if(XWF.privateViewLoadingOverlay!=null)
+                    {
+                        XWF.privateViewLoadingOverlay.parentNode.removeChild(XWF.privateViewLoadingOverlay);
+                        XWF.privateViewLoadingOverlay=null;
+                    }
+
+                    // Check if some API did return error
+                    if (result['data'].hasOwnProperty($apiVars.error) && result['data'][$apiVars.error] > 0) {
+
+                        // Give a chance to error handler have little work
+                        if(typeof XWF.connOnError==='function'){
+
+                            var repeatStack=function()
+                            {
+                                if(XWF.connServerMethod=='url')
+                                    XWF.privateConnResultUrl=currentServer+'?'+FBObjectToPost(currentObject);
+                                XWF.send({
+                                    windowClass:reqAddClass,navigationBar:reqBackBar,changeTitle:reqChangeTitle,
+                                    windowSubTitle:reqWindowSubTitle,returnData:reqEventReturn,raiseWindow:reqEventWindow,
+                                    raiseWindowID:reqEventWindowID,waitCallback:reqEventWaitCB,onComplete:reqEventComplete,
+                                    onCancelWindow:reqCancelWindow,disableInitiator:reqDisableInit,server:currentServer,
+                                    query:currentObject,data:currentData
+                                });
+                            };
+
+                            XWF.connOnError(result,result['data'][$apiVars.error],result['data'][$apiVars.errorMessage],repeatStack);
+                        }
+                        else
+                        {
+
+                            // Or execute on complete function if error handler isn't there
+                            // Include onErrorRepeat Function
+                            if(typeof reqRepeatOnError==='function'){
+                                result['repeat']=reqRepeatOnError;
+                            }
+                            // Execute onComplete function
+                            if(typeof reqEventComplete==='function'){
+                                reqEventComplete(result);
+                            }
                         }
 
                     }
+                    // If no error returns just try to continue
+                    else {
 
-                    // Execute onComplete function
-                    if(typeof reqEventComplete==='function'){
-                        reqEventComplete(result);
+                        // Include onErrorRepeat Function
+                        if(typeof reqRepeatOnError==='function'){
+                            result['repeat']=reqRepeatOnError;
+                        }
+                        // Execute onComplete function
+                        if(typeof reqEventComplete==='function'){
+                            reqEventComplete(result);
+                        }
+
                     }
 
                 },false);
@@ -134,18 +219,54 @@
 
         this.openwindow = function(val){
 
-            FBOpenWindowView(val);
+            var reqEventWindowID=(val.hasOwnProperty('raiseWindowID'))?val['raiseWindowID']:false;
+            var reqBackBar=(val.hasOwnProperty('navigationBar'))?val['navigationBar']:true;
+            var reqAddClass=(val.hasOwnProperty('windowClass'))?val['windowClass']:true;
+            var reqChangeTitle=(val.hasOwnProperty('changeTitle'))?val['changeTitle']:false;
+            var reqWindowSubTitle=(val.hasOwnProperty('windowSubTitle'))?val['windowSubTitle']:false;
+            var reqCancelWindow=(val.hasOwnProperty('onCancelWindow'))?val['onCancelWindow']:null;
+
+            var openWindow=FBOpenWindowView({raiseWindowID:reqEventWindowID,cancelWindowEv:reqCancelWindow,raiseWindowClass:reqAddClass,reqBackBar:reqBackBar,reqTitle:reqChangeTitle,reqSubTitle:reqWindowSubTitle});
+            document.body.appendChild(openWindow['frame']);
+            setTimeout(function(){
+                csstext=openWindow.content.style.cssText;
+                openWindow.content.setAttribute('style',csstext+' -webkit-overflow-scrolling:touch;');
+            },500);
+            return openWindow;
+
+        };
+
+        this.closewindow = function(win){
+
+            FBCloseWindowView(win);
+
+        };
+
+        this.removewindows = function(){
+
+            winObj=XWF.privateViewQueue.slice(0);
+            for(var k in winObj){
+
+                if(winObj.hasOwnProperty(k)){
+                    cur=winObj[k];
+                    console.log(cur);
+                    frm=document.getElementById(cur.id);
+                    if(frm!=null){
+                        frm.parentNode.removeChild(frm);
+                    }
+                    //arrayRemove(XWF.privateViewQueue,k);
+                }
+
+            }
+            XWF.privateViewQueue=[];
+            XWF.privateViewCurrentIndex=null;
+            XWF.privateViewCurrent=null;
 
         };
 
     };
 
     function FBXHRCallbackResponse(data){
-
-        var obj = null;
-
-        var error=false;
-        var ernum=0;
 
         try {
             data = JSON.parse(data);
@@ -155,12 +276,6 @@
 
         if(data!=null){
 
-            if (!data[$apiVars.result] && data[$apiVars.error] > 0) {
-
-                error=true;
-                ernum=data[$apiVars.error];
-
-            }
             if(data[$apiVars.notify]){
                 if($apiVars.notifyTimer in data){
                     FBNotify({message:data[$apiVars.notifyMessage],destroy:data[$apiVars.notifyTimer]});
@@ -169,18 +284,175 @@
                 }
             }
 
-            //console.log(data);
-            return data;
         }
+
+        return data;
+    }
+
+    /* ----------------------------------------------------
+    >------         OPEN VIEW WINDOW                ------<
+    ------------------------------------------------------*/
+    function FBOpenWindowView(values)
+    {
+
+        var win,id,header,headerTitle,content,title;
+
+        win = document.createElement('div');
+        win.className = 'xwf_view xwf_view_background xwf_window xwf_visible xwf_slideInLeft';
+
+        var curDate=new Date();
+        timeId=curDate.getDate()+''+curDate.getHours()+''+curDate.getMinutes()+''+curDate.getSeconds()+''+ curDate.getMilliseconds();
+
+        if(values.raiseWindowID){
+            win.setAttribute('id',values.raiseWindowID);
+            id=values.raiseWindowID;
+        } else {
+            win.setAttribute('id','view' + timeId);
+            id='view' + timeId;
+        }
+
+        var currentHeight=window.innerHeight;
+        var currentWidth=window.innerWidth;
+        win.style.height = currentHeight+'px';
+        win.style.width = currentWidth+'px';
+
+        header = document.createElement('div');
+        header.className = 'xwf_window_header';
+        header.style.height=XWF.defaultHeaderHeight+'px';
+
+        headerTitle = document.createElement('div');
+        headerTitle.className = 'xwf_window_header_title';
+        if(values.reqTitle){
+            headerTitle.innerHTML = values.reqTitle;
+        }
+        header.appendChild(headerTitle);
+
+        currentHeight-=XWF.defaultHeaderHeight;
+
+        win.appendChild(header);
+
+        if(values.reqBackBar)
+        {
+
+            var backBar=null;
+            if(values.reqSubTitle)
+                backBar=cineBoxFnRestoMenuBack(values.cancelWindowEv,values.reqSubTitle);
+            else
+                backBar=cineBoxFnRestoMenuBack(values.cancelWindowEv);
+
+            backBar.style.height=XWF.defaultNavBarHeight+'px';
+            currentHeight-=XWF.defaultNavBarHeight;
+
+            win.appendChild(backBar);
+
+        }
+
+        content = document.createElement('div');
+        content.className = 'xwf_window_content';
+        content.style.height = currentHeight+'px';
+        content.style.width = currentWidth+'px';
+        content.addEventListener('touchstart',function(e){});
+
+        var append =function(node){
+
+                if(node.nodeType==1){
+                    this.appendChild(node);
+                }
+
+        }.bind(content);
+
+        win.appendChild(content);
+
+        XWF.privateViewQueue.push({id:id,event:null,xhr:null});
+        XWF.privateViewCurrent=win;
+        XWF.privateViewCurrentIndex=XWF.privateViewQueue.length-1;
+
+        return {append:append,frame:win,content:content,title:headerTitle,header:header};
 
     }
 
-    function FBOpenWindowView(values){
+    function FBCloseWindowView(w){
+        var element,elementIndex,elementObject;
 
-        var window,content,title;
+        if(typeof w==="undefined" && XWF.privateViewCurrent!=null)
+        {
 
+            element=XWF.privateViewCurrent;
+            elementIndex=XWF.privateViewCurrentIndex;
+            elementObject=XWF.privateViewQueue[elementIndex];
 
-        return {frame:window,content:content,title:title};
+            arrayRemove(XWF.privateViewQueue,elementIndex);
+            windowsCount=XWF.privateViewQueue.length;
+
+            if(windowsCount==0)
+            {
+
+                XWF.privateViewCurrent=null;
+                XWF.privateViewCurrentIndex=null;
+                if(XWF.defaultView!=null){
+
+                    initialView=document.getElementById(XWF.defaultView);
+                    if(initialView!=null){
+                        initialView.style.display='block';
+                    }
+
+                }
+
+            } else {
+
+                newIndex=windowsCount-1;
+                newElementObject=XWF.privateViewQueue[newIndex];
+                newWindowToShow=document.getElementById(newElementObject.id);
+
+                if(newWindowToShow!=null){
+
+                    XWF.privateViewCurrent=newWindowToShow;
+                    XWF.privateViewCurrentIndex=newIndex;
+
+                }
+
+            }
+
+            element.className+=" xwf_slideOutRight";
+            setTimeout(function(){
+                this.parentNode.removeChild(this);
+            }.bind(element),600);
+
+        }
+        else
+        {
+
+        }
+    }
+
+    function cineBoxFnRestoMenuBack(ev,title){
+
+        var n,i;
+
+        n=document.createElement('div');
+        n.className = 'xwf_window_bar';
+        i=document.createElement('div');
+        i.className = 'xwf_window_bar_bb';
+        i.innerHTML = '<div class="xwf_window_bar_bbb"></div>Back';
+        i.addEventListener('click',function(e){
+
+            if(typeof this==='function')
+            {
+                this();
+            }
+            FBCloseWindowView();
+
+        }.bind(ev));
+        n.appendChild(i);
+
+        if(typeof title!=='undefined'){
+            i=document.createElement('div');
+            i.className = 'xwf_window_bar_title';
+            i.innerHTML = title;
+            n.appendChild(i);
+        }
+
+        return n;
 
     }
 
@@ -189,7 +461,11 @@
         var scr = document.createElement('div');
         scr.className = 'xwf_loadingOverlay';
 
-        scr.style.cssText = "position:absolute; top:0; left:0; z-index:9999; width:100%; height:100%; background-color:rgba(20,20,20,0.2)";
+        var spinner = document.createElement('div');
+        spinner.className = 'xwf_loadingOverlaySpin';
+        spinner.innerHTML = '<i class="fa fa-spinner fa-spin"></i>';
+        scr.appendChild(spinner);
+
         document.body.appendChild(scr);
         XWF.privateViewLoadingOverlay=scr;
 
@@ -210,7 +486,7 @@
                 xhr.setRequestHeader("X-Requested-With","XMLHttpRequest");
 
                 // Timeout counter
-                timeout=setTimeout(function(){console.log(' + --- XHR REQUEST TIMED OUT '); xhr.abort(); clearInterval(ival);}.bind(xhr),3000);
+                timeout=setTimeout( function(){console.log(' + --- XHR REQUEST TIMED OUT '); xhr.abort(); clearInterval(ival);}.bind(xhr),3000);
 
                 xhr.onreadystatechange = function()
                 {
@@ -261,7 +537,7 @@
                 }
 
                 if(typeof data === 'object')
-                    data = FBObjectToPost(data,'ajax');
+                    data = FBObjectToPost(data);
                 xhr.send(data);
 
             }
@@ -281,12 +557,74 @@
         return r.join('&');
     }
 
-    function FBNotify(obj){
+    function FBNotify(data){
+
+        var l,i,c,b,a;
+
+        if(XWF.privateNotifications!=null){
+            l=XWF.privateNotifications;
+            if(!document.body.contains(l)){
+                l=document.createElement('div');
+                l.className='c_notify_layer';
+                XWF.privateNotifications=l;
+                document.body.appendChild(l);
+            }
+        } else {
+            l=document.createElement('div');
+            l.className='c_notify_layer';
+            XWF.privateNotifications=l;
+            document.body.appendChild(l);
+        }
+
+        i=document.createElement('div'); i.className='c_notify_i';
+
+        c=document.createElement('div'); c.className='c_notify_i_c';
+        c.innerHTML = data.message;
+
+        b=document.createElement('div'); b.className='c_notify_i_b';
+        a=document.createElement('button'); a.className='c_notify_b_b';
+        a.innerHTML = '<div class="fa fa-times" style="margin-left:-20px"></div>';
+        a.addEventListener('click',function(e){FBNotifyClose(e,this)}.bind({notify:l,item:i}));
+
+        if('destroy' in data){
+            var d=data['destroy'];
+            if(d>0){
+                setTimeout(function(e){FBNotifyClose(e,this)}.bind({notify:l,item:i}),d*1000);
+            }
+        }
+
+        b.appendChild(a);
+        i.appendChild(c);
+        i.appendChild(b);
+
+        l.appendChild(i);
+
+    }
+
+    function FBNotifyClose(e,o){
+
+        var i = o.item;
+        var l = o.notify;
+        if(document.body.contains(l)){
+            l.removeChild(i);
+            var c=l.childNodes;
+            c= c.length;
+            if(c<1){
+                l.parentNode.removeChild(l);
+                XWF.privateNotifications=null;
+            }
+        }
 
     }
 
     function arrayIndex(a,e){
        var l= a.length;for(var i=0;i<l;i++){if(this[i]===e)return {result:true,pos:i}}return false;
+    }
+
+    function arrayRemove(array, index) {
+        var n = array.slice((index) + 1 || array.length);
+        array.length = index < 0 ? array.length + index : index;
+        return array.push.apply(array,n);
     }
 
     if(!window.XWF){window.XWF = $cine();}
