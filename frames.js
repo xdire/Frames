@@ -39,6 +39,8 @@
     var FB = function()
     {
 
+        this.defaultContainer=null;
+
         this.defaultView = null;
         this.defaultHeaderHeight=76;
         this.defaultNavBarHeight=40;
@@ -72,10 +74,24 @@
 
         this.privateNotifications=null;
 
+        this.sysRefreshWinContentOnScroll=false;
+        this.sysRefreshWCTimer=null;
+
         if(this.windowHeight==0 || this.windowWidth==0){
             this.windowHeight=window.innerHeight;
             this.windowWidth=window.innerWidth;
         }
+
+        this.init = function(){
+            if(XWF.defaultContainer==null) {
+                this.windowHeight=window.innerHeight;
+                this.windowWidth=window.innerWidth;
+            } else {
+                var container=document.getElementById(XWF.defaultContainer);
+                this.windowHeight=container.offsetHeight;
+                this.windowWidth=container.offsetWidth;
+            }
+        };
 
         this.connection = function(val){
 
@@ -166,7 +182,13 @@
                         result['content']=window['content'];
                         result['title']=window['title'];
 
-                        document.body.appendChild(window['frame']);
+                        if(XWF.defaultContainer==null) {
+                            document.body.appendChild(window['frame']);
+                        } else {
+                            var container=document.getElementById(XWF.defaultContainer);
+                            container.appendChild(window['frame']);
+                        }
+
                         setTimeout(function(){
                             csstext=result.content.style.cssText;
                             result.content.setAttribute('style',csstext+' -webkit-overflow-scrolling:touch;');
@@ -243,11 +265,18 @@
             var reqCancelWindow=(val.hasOwnProperty('onCancelWindow'))?val['onCancelWindow']:null;
 
             var openWindow=FBOpenWindowView({raiseWindowID:reqEventWindowID,cancelWindowEv:reqCancelWindow,raiseWindowClass:reqAddClass,reqBackBar:reqBackBar,reqTitle:reqChangeTitle,reqSubTitle:reqWindowSubTitle});
-            document.body.appendChild(openWindow['frame']);
+            if(XWF.defaultContainer==null) {
+                document.body.appendChild(openWindow['frame']);
+            } else {
+                var container=document.getElementById(XWF.defaultContainer);
+                container.appendChild(openWindow['frame']);
+            }
+
             setTimeout(function(){
                 csstext=openWindow.content.style.cssText;
                 openWindow.content.setAttribute('style',csstext+' -webkit-overflow-scrolling:touch;');
             },500);
+
             return openWindow;
 
         };
@@ -265,7 +294,7 @@
 
                 if(winObj.hasOwnProperty(k)){
                     cur=winObj[k];
-                    console.log(cur);
+                    //console.log(cur);
                     frm=document.getElementById(cur.id);
                     if(frm!=null){
                         frm.parentNode.removeChild(frm);
@@ -311,10 +340,17 @@
     function FBOpenWindowView(values)
     {
 
-        var win,id,header,headerTitle,content,title,backBarEx=false,headerEx=false;
+        var win,id,header,headerTitle,content,title,backBarEx=false,headerEx=false,touchEnabled=true;
 
         win = document.createElement('div');
         win.className = 'xwf_view xwf_view_background xwf_window xwf_visible xwf_slideInLeft';
+
+        if(values.raiseWindowClass){
+            win.className += ' '+values.raiseWindowClass;
+        }
+        if(values.touchEnabled){
+            touchEnabled=values.touchEnabled;
+        }
 
         var curDate=new Date();
         timeId=curDate.getDate()+''+curDate.getHours()+''+curDate.getMinutes()+''+curDate.getSeconds()+''+ curDate.getMilliseconds();
@@ -327,10 +363,23 @@
             id='view' + timeId;
         }
 
-        var currentHeight=window.innerHeight;
-        var currentWidth=window.innerWidth;
-        win.style.height = currentHeight+'px';
-        win.style.width = currentWidth+'px';
+        if(XWF.defaultContainer==null) {
+
+            currentHeight = window.innerHeight;
+            currentWidth = window.innerWidth;
+            var zIndex=(XWF.privateViewQueue.length)*2;
+            win.style.zIndex = (zIndex>0)?zIndex:1;
+
+        } else {
+            container=document.getElementById(XWF.defaultContainer);
+            currentHeight = container.offsetHeight;
+            currentWidth = container.offsetWidth;
+        }
+
+        win.style.height = currentHeight + 'px';
+        win.style.width = currentWidth + 'px';
+
+
 
         header = document.createElement('div');
         header.className = 'xwf_window_header';
@@ -345,6 +394,7 @@
         headerEx=true;
 
         currentHeight-=XWF.defaultHeaderHeight;
+
 
         win.appendChild(header);
 
@@ -368,10 +418,8 @@
         content = document.createElement('div');
         content.className = 'xwf_window_content';
         content.style.height = currentHeight+'px';
-        //content.style.width = currentWidth+'px';
-        content.addEventListener('touchstart',function(e){});
 
-        var append =function(node){
+        var append = function(node){
 
                 if(node.nodeType==1){
                     this.appendChild(node);
@@ -381,12 +429,109 @@
 
         win.appendChild(content);
 
+        if(values.touchEnabled) {
+            win.addEventListener('touchstart', function (e) {
+                FBTouchWindow(e);
+            });
+            win.addEventListener('touchmove', function (e) {
+                FBTouchWindowMove(e, this);
+            }.bind(win));
+            win.addEventListener('touchend', function (e) {
+                FBTouchWindowEnd(e, this);
+            }.bind({w: win, c: content}));
+        }
+
+        if(XWF.sysRefreshWinContentOnScroll) {
+            content.addEventListener('scroll', function (e) {
+                var cont = this;
+                if (XWF.sysRefreshWCTimer != null) {
+                    clearTimeout(XWF.sysRefreshWCTimer);
+                }
+                XWF.sysRefreshWCTimer = setTimeout(function () {
+
+                    cont.style.display = 'none';
+                    cont.offsetHeight;
+                    cont.style.display = 'block';
+                    cont.offsetHeight;
+
+                }, 200);
+
+            }.bind(content));
+        }
+
         XWF.privateViewQueue.push({id:id,window:win,event:null,xhr:null,content:content,withHeader:headerEx,withBackBar:backBarEx});
         XWF.privateViewCurrent=win;
         XWF.privateViewCurrentIndex=XWF.privateViewQueue.length-1;
 
         return {append:append,frame:win,content:content,title:headerTitle,header:header};
 
+    }
+
+    var wtouches={};
+    var wcursorX=0;
+    var wcursorLX=0;
+    var wcursorDX=0;
+
+    var wcursorDistance=0;
+    var wcursorLastDist=0;
+
+    function pixelToInteger(t){var r=/[(px+)(%+)]+/g;return parseInt(t.replace(r,''));}
+
+    function FBTouchWindow(e)
+    {
+        wcursorLastDist=0;
+        wcursorDistance=0;
+        wcursorLX=0;
+        wcursorDX=0;
+        var touches = e.changedTouches;
+
+        for(var t=0;t<touches.length;t++){
+            wtouches[touches[t].identifier]={
+                pageX:touches[t].pageX,
+                pageY:touches[t].pageY
+            };
+        }
+    }
+
+    function FBTouchWindowMove(e,w)
+    {
+        var touches = e.changedTouches;
+        var dx=0,nx=0,x=0;
+        for(var t=0;t<touches.length;t++)
+        {
+            var wt=wtouches[touches[t].identifier];
+            x=wt.pageX;
+            nx=touches[t].pageX;
+            dx=Math.abs(nx-x);
+        }
+        wcursorDistance+=dx-wcursorLastDist;
+        wcursorLastDist=dx;
+
+        if(Math.abs(wcursorDistance)>50 && dx>wcursorDX)
+        {
+            cl=pixelToInteger(getComputedStyle(w).getPropertyValue('left'));
+            w.style.left=(cl+(wcursorDistance/2))+'px';
+
+            if(wcursorDistance>=160){
+                FBCloseWindowView();
+                wcursorDistance=0;
+                return true;
+            }
+            e.preventDefault();
+
+        } else {
+            return true;
+        }
+
+        wcursorLX=x;
+        wcursorDX=dx;
+
+    }
+
+    function FBTouchWindowEnd(e,w){
+        if(wcursorDistance<160){
+            w.w.style.left=0;
+        }
     }
 
     function FBCloseWindowView(w){
@@ -432,7 +577,8 @@
             }
 
             element.className+=" xwf_slideOutRight";
-            setTimeout(function(){
+            setTimeout(function()
+            {
                 this.parentNode.removeChild(this);
             }.bind(element),600);
 
@@ -510,6 +656,11 @@
                         FBNotify({message:"Connection timed out"});
                         xhr.abort();
                         clearInterval(iterateValue);
+                        if(XWF.privateViewLoadingOverlay!=null)
+                        {
+                            XWF.privateViewLoadingOverlay.parentNode.removeChild(XWF.privateViewLoadingOverlay);
+                            XWF.privateViewLoadingOverlay=null;
+                        }
                     }.bind(xhr), 3000);
                 }
 
@@ -533,6 +684,11 @@
                                 callback('{"notify":true,"notify_msg":"Requested data encounter server error","notify_time":"5"}');
                             } else {
                                 callback('{"notify":true,"notify_msg":"Connection to server is unavailable","notify_time":"5"}');
+                            }
+                            if(XWF.privateViewLoadingOverlay!=null)
+                            {
+                                XWF.privateViewLoadingOverlay.parentNode.removeChild(XWF.privateViewLoadingOverlay);
+                                XWF.privateViewLoadingOverlay=null;
                             }
                         }
                     }
@@ -643,7 +799,7 @@
     }
 
     function arrayIndex(a,e){
-       var l= a.length;for(var i=0;i<l;i++){if(this[i]===e)return {result:true,pos:i}}return false;
+       var l= a.length;for(var i=0;i<l;i++){if(a[i]===e)return {result:true,pos:i}}return false;
     }
 
     function arrayRemove(array, index) {
@@ -654,8 +810,17 @@
 
     window.addEventListener("resize", function () {
 
-        var w=window.innerWidth;
-        var h=window.innerHeight;
+        var w= 0,h=0;
+
+        if(XWF.defaultContainer==null) {
+            w=window.innerWidth;
+            h=window.innerHeight;
+        } else {
+            var container=document.getElementById(XWF.defaultContainer);
+            w=container.offsetWidth;
+            h=container.offsetHeight;
+        }
+
         XWF.windowHeight=h;
         XWF.windowWidth=w;
 
